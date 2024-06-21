@@ -70,6 +70,15 @@ pgmoneta_manifest_checksum_verify(char* root);
 int
 pgmoneta_compare_manifests(char* old_manifest, char* new_manifest, struct art** deleted_files, struct art** changed_files, struct art** added_files);
 
+/**
+ * Verify files' checksum against backup_manifest
+ * @param server The server
+ * @param backup_id The backup id.
+ * @return 0 upon success, otherwise 1.
+ */
+int
+pgmoneta_verify_data(int srv, char *backup_id);
+
 #ifdef __cplusplus
 }
 #endif

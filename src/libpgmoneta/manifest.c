@@ -383,3 +383,186 @@ build_tree(struct art* tree, struct csv_reader* reader, char** f)
       checksum = NULL;
    }
 }
+
+int
+pgmoneta_verify_data(int srv, char *backup_id)
+{
+	char* d = NULL;
+	int backup_index = -1;
+	int number_of_backups = 0;
+	struct backup** backups = NULL;
+	struct configuration* config;
+
+	config = (struct configuration*)shmem;
+
+	d = pgmoneta_get_server_backup(srv);
+
+	if (pgmoneta_get_backups(d, &number_of_backups, &backups))
+	{
+		goto error;
+	}
+	free(d);
+	d = NULL;
+
+	//select proper backup
+	if (!strcmp(backup_id, "oldest"))
+	{
+		for (int i = 0; backup_index == -1 && i < number_of_backups; i++)
+		{
+			if (backups[i] != NULL)
+			{
+				backup_index = i;
+			}
+		}
+	}
+	else if (!strcmp(backup_id, "latest") || !strcmp(backup_id, "newest"))
+	{
+		for (int i = number_of_backups - 1; backup_index == -1 && i >= 0; i--)
+		{
+			if (backups[i] != NULL)
+			{
+				backup_index = i;
+			}
+		}
+	}
+	else
+	{
+		for (int i = 0; backup_index == -1 && i < number_of_backups; i++)
+		{
+			if (backups[i] != NULL && !strcmp(backups[i]->label, backup_id))
+			{
+				backup_index = i;
+			}
+		}
+	}
+
+	if (backup_index == -1)
+	{
+		pgmoneta_log_error("Verify: No identifier for %s/%s", config->servers[srv].name, backup_id);
+		goto error;
+	}
+
+	if (backups[backup_index]->valid == VALID_FALSE)
+	{
+		pgmoneta_log_error("Verify: Backup is not valid");
+		goto error;
+	}
+
+	char* backup_manifest = NULL;
+
+	//get backup_manifest file. maybe turn this into a utility function?
+	backup_manifest = pgmoneta_get_server_backup_identifier_data(srv, backups[backup_index]->label);
+	backup_manifest = pgmoneta_append(backup_manifest, "backup_manifest");
+
+	if (pgmoneta_exists(backup_manifest) == false)
+	{
+		pgmoneta_log_error("Verify: backup_manifest does not exist.");
+		free(backup_manifest);
+		backup_manifest = NULL;
+		goto error;
+	}
+
+	if (pgmoneta_is_file(backup_manifest) == false)
+	{
+		pgmoneta_log_error("Verify: backup_manifest is not a file.");
+		free(backup_manifest);
+		backup_manifest = NULL;
+		goto error;
+	}
+
+	pgmoneta_log_debug("Verify: backup_manifest file found - OK");
+
+	struct json_reader* reader = NULL;
+	struct json* output = NULL;
+	struct json* output_item = NULL;
+
+	if (pgmoneta_json_init(&output, JSONArray) == 1)
+	{
+		//refactor
+		pgmoneta_log_error("Verify: could not initalize output JSON Object");
+		exit(2);
+	}
+
+	if (!pgmoneta_json_reader_init(backup_manifest, &reader))
+	{
+		pgmoneta_log_debug("Verify: Json reader init OK");
+		//goto first array element
+		char* key_path[1] = {"Files"};
+
+		if (!pgmoneta_json_locate(reader, key_path, 1))
+		{
+			struct json* f1 = NULL;
+			char* path = NULL;
+			char* manifest_checksum = NULL;
+			char* actual_checksum = NULL;
+
+			//iterate through Files array items
+			while(pgmoneta_json_next_array_item(reader, &f1))
+			{
+				char* absolute_file_path = NULL;
+
+				//create json object
+				pgmoneta_json_init(&output_item, JSONItem);
+
+				path = pgmoneta_json_get_string_value(f1, "Path");
+
+				//put filepath to json output_item
+
+				//construct absolute path for data files
+				absolute_file_path = pgmoneta_get_server_backup_identifier_data(srv, backups[backup_index]->label);
+				pgmoneta_append(absolute_file_path, path);
+
+				//calculate checksum for data file
+				manifest_checksum = pgmoneta_json_get_string_value(f1, "Checksum");
+				pgmoneta_json_item_put_string(output_item, "Manifest Checksum", manifest_checksum);
+
+				//check if file checksum equals checksum reported on manifest.
+				if(!pgmoneta_create_sha256_file(absolute_file_path, &actual_checksum))
+				{
+					pgmoneta_json_item_put_string(output_item, "Actual Checksum", actual_checksum);
+					// pgmoneta_log_debug("Path: %s | Checksum: %s | Actual Checksum: %s", path, manifest_checksum, actual_checksum); -> delete later
+					if (strcmp(manifest_checksum, actual_checksum))
+					{
+						//different checksums
+						//put KO value in Check key in output_item json
+						pgmoneta_json_item_put_string(output_item, "Check", "Fail");
+						pgmoneta_log_debug("Path: %s | Checksum: %s | Actual Checksum: %s", path, manifest_checksum, actual_checksum);
+						//TODO: verify leaks. As of now, since this process will die, OS frees resources
+					}
+					else
+					{
+						//put OK in value in Check key in output_item json
+						pgmoneta_json_item_put_string(output_item, "Check", "Success");
+					}
+					pgmoneta_json_item_put_string(output_item, "Path", path);
+
+					//now we have to put output_item into output
+					pgmoneta_json_array_append_object(output, output_item);
+				}
+			}
+			pgmoneta_json_print(output, 1);
+			pgmoneta_json_close_reader(reader);
+			pgmoneta_json_free(f1);
+			return 0;
+		}
+		
+	}
+	else
+	{
+		free(reader);
+		free(backup_manifest);
+		goto error;
+	}
+
+error:
+
+	for (int i = 0; i < number_of_backups; i++)
+	{
+		free(backups[i]);
+	}
+	free(backups);
+	
+	free(d);
+
+	return 1;
+}

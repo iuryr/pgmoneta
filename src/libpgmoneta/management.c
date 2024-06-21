@@ -130,6 +130,10 @@ pgmoneta_management_read_payload(int socket, signed char id, char** payload_s1, 
          read_string("pgmoneta_management_read_payload", socket, payload_s1);
          read_string("pgmoneta_management_read_payload", socket, payload_s2);
          break;
+      case MANAGEMENT_VERIFY:
+         read_string("pgmoneta_management_read_payload", socket, payload_s1);
+         read_string("pgmoneta_management_read_payload", socket, payload_s2);
+         break;
       case MANAGEMENT_STOP:
       case MANAGEMENT_STATUS:
       case MANAGEMENT_STATUS_DETAILS:
@@ -1278,6 +1282,31 @@ pgmoneta_management_encrypt(SSL* ssl, int socket, char* path)
    {
       goto error;
    }
+
+   return 0;
+
+error:
+
+   return 1;
+}
+
+int
+pgmoneta_management_verify_data(SSL* ssl, int socket, char* server, char *backup_id)
+{
+   if (write_header(ssl, socket, MANAGEMENT_VERIFY))
+   {
+      pgmoneta_log_warn("pgmoneta_management_verify_data: write: %d", socket);
+      errno = 0;
+      goto error;
+   }
+	if (write_string("pgmoneta_management_verify_data", socket, server))
+	{
+		goto error;
+	}
+	if (write_string("pgmoneta_management_verify_data", socket, backup_id))
+	{
+		goto error;
+	}
 
    return 0;
 

@@ -40,6 +40,7 @@
 #include <logging.h>
 #include <lz4_compression.h>
 #include <management.h>
+#include <manifest.h>
 #include <memory.h>
 #include <message.h>
 #include <network.h>
@@ -1348,7 +1349,53 @@ accept_mgt_cb(struct ev_loop* loop, struct ev_io* watcher, int revents)
             free(payload_s2);
             exit(0);
          }
+         break;
+      case MANAGEMENT_VERIFY:
+        pgmoneta_log_debug("Management verify: %s/%s", payload_s1, payload_s2);
 
+		srv = -1;
+		for (int i = 0; srv == -1 && i < config->number_of_servers; i++)
+		{
+			if (!strcmp(config->servers[i].name, payload_s1))
+			{
+				srv = i;
+			}
+		}
+		
+		//select backup
+		if (srv != -1)
+		{
+			pid = fork();
+			if (pid == -1)
+			{
+				pgmoneta_management_process_result(client_fd, srv, NULL, 1, true); //maybe delete this call
+				pgmoneta_log_error("Cannot create process");
+			}
+			else if (pid == 0)
+			{
+				pgmoneta_set_proc_title(1, argv_ptr, "verify", config->servers[srv].name);
+
+				//shutdown_ports(); //I'm not sure if I have to call this function
+				ret = pgmoneta_verify_data(srv, payload_s2);
+				pgmoneta_management_process_result(client_fd, srv, payload_s1, ret, true);
+				if (ret == 0)
+				{
+					exit(0);
+				}
+				else 
+				{
+					exit(1);
+				}
+			}
+		}
+
+		if (srv == -1)
+		{
+			pgmoneta_log_error("Verify - Unknown server %s", payload_s1);
+		}
+	
+        free(payload_s1);
+        free(payload_s2);
          break;
       default:
          pgmoneta_log_debug("Unknown management id: %d", id);
